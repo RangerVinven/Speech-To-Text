@@ -23,7 +23,7 @@ audio_data = []
 stream = None
 
 # PTT Combination Configuration
-COMBINATION = {keyboard.Key.ctrl, keyboard.Key.alt, keyboard.KeyCode.from_char('r')}
+COMBINATION = {keyboard.Key.ctrl, keyboard.Key.alt, keyboard.KeyCode.from_char('t')}
 current_keys = set()
 
 def get_base_key(key):
@@ -166,7 +166,7 @@ if __name__ == "__main__":
     listener_thread.start()
     
     print(f"\n--- Speech to Text (Push-To-Talk) Ready ---")
-    print(f"Press and HOLD <Ctrl> + <Option> + <R> to record.")
+    print(f"Press and HOLD <Ctrl> + <Option> + <T> to record.")
     print(f"Release to stop and transcribe.")
     print(f"-------------------------------------------\n")
     
