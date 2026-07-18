@@ -8,7 +8,7 @@ from faster_whisper import WhisperModel
 from pynput import keyboard
 import tkinter as tk
 
-MODEL_SIZE = "base.en" if sys.platform == 'darwin' else "small.en"
+MODEL_SIZE = "tiny.en"
 SAMPLE_RATE = 16000
 
 print(f"Loading Whisper model ({MODEL_SIZE})...")
@@ -23,21 +23,16 @@ audio_data = []
 stream = None
 
 # PTT Combination Configuration
-COMBINATION = {keyboard.Key.ctrl, keyboard.Key.alt, keyboard.KeyCode.from_char('t')}
 current_keys = set()
+listener = None
 
-def get_base_key(key):
-    if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
-        return keyboard.Key.ctrl
-    if key in (keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt_gr):
-        return keyboard.Key.alt
-    if key in (keyboard.Key.cmd_l, keyboard.Key.cmd_r):
-        return keyboard.Key.cmd
-    if key in (keyboard.Key.shift_l, keyboard.Key.shift_r):
-        return keyboard.Key.shift
-    if hasattr(key, 'char') and key.char is not None:
-        return keyboard.KeyCode.from_char(key.char.lower())
-    return key
+def is_combination_pressed(keys):
+    for k in keys:
+        if k == keyboard.Key.f9:
+            return True
+        if hasattr(k, 'name') and k.name == 'f9':
+            return True
+    return False
 
 def start_recording():
     global is_recording, audio_data, stream
@@ -88,18 +83,18 @@ def stop_recording_and_transcribe():
         ui_queue.put({"action": "type", "text": text})
 
 def on_press(key):
-    base_key = get_base_key(key)
-    current_keys.add(base_key)
-    if COMBINATION.issubset(current_keys):
+    current_keys.add(key)
+    if is_combination_pressed(current_keys):
         if not is_recording:
             start_recording()
 
 def on_release(key):
-    base_key = get_base_key(key)
-    if base_key in current_keys:
-        current_keys.remove(base_key)
+    try:
+        current_keys.remove(key)
+    except KeyError:
+        pass
     
-    if is_recording and not COMBINATION.issubset(current_keys):
+    if is_recording and not is_combination_pressed(current_keys):
         # Run transcription in a background thread to keep keyboard listener fast
         threading.Thread(target=stop_recording_and_transcribe, daemon=True).start()
 
@@ -154,8 +149,10 @@ def setup_ui():
     return root
 
 def run_listener():
-    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-        listener.join()
+    global listener
+    with keyboard.Listener(on_press=on_press, on_release=on_release) as l:
+        listener = l
+        l.join()
 
 if __name__ == "__main__":
     # Setup UI FIRST so macOS creates the NSApplication on the main thread safely
@@ -166,7 +163,7 @@ if __name__ == "__main__":
     listener_thread.start()
     
     print(f"\n--- Speech to Text (Push-To-Talk) Ready ---")
-    print(f"Press and HOLD <Ctrl> + <Option> + <T> to record.")
+    print(f"Press and HOLD <F9> to record.")
     print(f"Release to stop and transcribe.")
     print(f"-------------------------------------------\n")
     
