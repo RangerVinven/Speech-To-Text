@@ -8,7 +8,7 @@ from faster_whisper import WhisperModel
 from pynput import keyboard
 import tkinter as tk
 
-MODEL_SIZE = "tiny.en"
+MODEL_SIZE = "base.en"
 SAMPLE_RATE = 16000
 
 print(f"Loading Whisper model ({MODEL_SIZE})...")
