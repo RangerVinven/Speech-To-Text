@@ -1,4 +1,5 @@
 import sys
+import subprocess
 import threading
 import queue
 import time
@@ -41,34 +42,25 @@ def is_combination_pressed(keys):
             return True
     return False
 
-def get_webcam_device():
-    """Finds the webcam (C920) device index, strictly excluding any Soundcore/Bluetooth devices."""
+def ensure_webcam_input():
+    """Ensure the system default source is the C920 Webcam and not Bluetooth."""
     try:
-        devices = sd.query_devices()
-        # 1. Look specifically for C920 / Webcam
-        for idx, dev in enumerate(devices):
-            if dev['max_input_channels'] > 0:
-                name = dev['name'].lower()
-                if 'c920' in name or 'webcam' in name:
-                    return idx
-        # 2. Fallback: Any input device that is strictly NOT Soundcore / Bluetooth
-        for idx, dev in enumerate(devices):
-            if dev['max_input_channels'] > 0:
-                name = dev['name'].lower()
-                if 'soundcore' not in name and 'bluez' not in name and 'q45' not in name:
-                    return idx
-    except Exception as e:
-        print(f"Error querying audio devices: {e}", file=sys.stderr)
-    return None
+        sources_out = subprocess.check_output(["pactl", "list", "sources", "short"], text=True)
+        for line in sources_out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                name = parts[1]
+                if "c920" in name.lower() or "webcam" in name.lower():
+                    subprocess.run(["pactl", "set-default-source", name], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+    except Exception:
+        pass
 
 def start_recording():
     global is_recording, audio_data, stream
     if is_recording: return
     is_recording = True
     audio_data = []
-    print("Recording started...")
-    
-    ui_queue.put("show")
     
     def callback(indata, frames, time, status):
         if status:
@@ -76,15 +68,23 @@ def start_recording():
         if is_recording:
             audio_queue.put(indata.copy())
             
-    dev_idx = get_webcam_device()
-    if dev_idx is not None:
-        dev_name = sd.query_devices(dev_idx)['name']
-        print(f"Using audio device: [{dev_idx}] {dev_name}")
-    else:
-        print("Warning: Webcam not found; using system default (non-Bluetooth fallback).", file=sys.stderr)
-
-    stream = sd.InputStream(device=dev_idx, samplerate=SAMPLE_RATE, channels=1, dtype='float32', callback=callback)
-    stream.start()
+    try:
+        ensure_webcam_input()
+        stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32', callback=callback)
+        stream.start()
+        print("Recording started...")
+        ui_queue.put("show")
+    except Exception as e:
+        print(f"Failed to start recording: {e}", file=sys.stderr)
+        is_recording = False
+        ui_queue.put("hide")
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+            stream = None
 
 def stop_recording_and_transcribe():
     global is_recording, stream, audio_data
@@ -127,20 +127,26 @@ def stop_recording_and_transcribe():
         ui_queue.put({"action": "type", "text": text})
 
 def on_press(key):
-    current_keys.add(key)
-    if is_combination_pressed(current_keys):
-        if not is_recording:
-            start_recording()
+    try:
+        current_keys.add(key)
+        if is_combination_pressed(current_keys):
+            if not is_recording:
+                start_recording()
+    except Exception as e:
+        print(f"Error in on_press: {e}", file=sys.stderr)
 
 def on_release(key):
     try:
-        current_keys.remove(key)
-    except KeyError:
-        pass
-    
-    if is_recording and not is_combination_pressed(current_keys):
-        # Run transcription in a background thread to keep keyboard listener fast
-        threading.Thread(target=stop_recording_and_transcribe, daemon=True).start()
+        try:
+            current_keys.remove(key)
+        except KeyError:
+            pass
+        
+        if is_recording and not is_combination_pressed(current_keys):
+            # Run transcription in a background thread to keep keyboard listener fast
+            threading.Thread(target=stop_recording_and_transcribe, daemon=True).start()
+    except Exception as e:
+        print(f"Error in on_release: {e}", file=sys.stderr)
 
 def execute_typing(text):
     print("\n[Attempting to type text into your active window...]")
