@@ -8,12 +8,19 @@ from faster_whisper import WhisperModel
 from pynput import keyboard
 import tkinter as tk
 
-MODEL_SIZE = "base.en"
+MODEL_SIZE = "large-v3-turbo"
 SAMPLE_RATE = 16000
 
-print(f"Loading Whisper model ({MODEL_SIZE})...")
-model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
-print("Model loaded successfully.")
+# Try GPU (CUDA) first with int8_float16 (optimal performance & lower VRAM on GTX 1660)
+# Fallback gracefully to CPU if CUDA is unavailable or encounters an error.
+try:
+    print(f"Attempting to load Whisper model ({MODEL_SIZE}) on GPU (CUDA)...")
+    model = WhisperModel(MODEL_SIZE, device="cuda", compute_type="int8_float16")
+    print("Model loaded successfully on GPU (CUDA: int8_float16).")
+except Exception as cuda_err:
+    print(f"CUDA initialization failed ({cuda_err}). Falling back to CPU...")
+    model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+    print("Model loaded successfully on CPU (int8).")
 
 # Global State
 is_recording = False
@@ -34,6 +41,26 @@ def is_combination_pressed(keys):
             return True
     return False
 
+def get_webcam_device():
+    """Finds the webcam (C920) device index, strictly excluding any Soundcore/Bluetooth devices."""
+    try:
+        devices = sd.query_devices()
+        # 1. Look specifically for C920 / Webcam
+        for idx, dev in enumerate(devices):
+            if dev['max_input_channels'] > 0:
+                name = dev['name'].lower()
+                if 'c920' in name or 'webcam' in name:
+                    return idx
+        # 2. Fallback: Any input device that is strictly NOT Soundcore / Bluetooth
+        for idx, dev in enumerate(devices):
+            if dev['max_input_channels'] > 0:
+                name = dev['name'].lower()
+                if 'soundcore' not in name and 'bluez' not in name and 'q45' not in name:
+                    return idx
+    except Exception as e:
+        print(f"Error querying audio devices: {e}", file=sys.stderr)
+    return None
+
 def start_recording():
     global is_recording, audio_data, stream
     if is_recording: return
@@ -49,7 +76,14 @@ def start_recording():
         if is_recording:
             audio_queue.put(indata.copy())
             
-    stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32', callback=callback)
+    dev_idx = get_webcam_device()
+    if dev_idx is not None:
+        dev_name = sd.query_devices(dev_idx)['name']
+        print(f"Using audio device: [{dev_idx}] {dev_name}")
+    else:
+        print("Warning: Webcam not found; using system default (non-Bluetooth fallback).", file=sys.stderr)
+
+    stream = sd.InputStream(device=dev_idx, samplerate=SAMPLE_RATE, channels=1, dtype='float32', callback=callback)
     stream.start()
 
 def stop_recording_and_transcribe():
@@ -73,8 +107,18 @@ def stop_recording_and_transcribe():
         return
         
     audio_np = np.concatenate(audio_data, axis=0).flatten()
-    segments, info = model.transcribe(audio_np, beam_size=1)
-    text = "".join([segment.text for segment in segments]).strip()
+    try:
+        segments, info = model.transcribe(
+            audio_np,
+            language="en",
+            beam_size=5,
+            vad_filter=True,
+            condition_on_previous_text=False
+        )
+        text = "".join([segment.text for segment in segments]).strip()
+    except Exception as e:
+        print(f"Transcription error: {e}", file=sys.stderr)
+        text = ""
     
     print(f"Transcribed: {text}")
     
